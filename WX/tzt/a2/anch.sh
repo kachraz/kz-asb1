@@ -13,8 +13,8 @@ ENABLE_ANCHOR_TEST=true
 # WALLET CONFIGURATION
 # =============================================
 
-WALLET_DIR="pee"  # Default Solana wallet directory
-WALLET_FILE="wallet_1.json"              # Default wallet file name
+WALLET_DIR="$HOME/.config/solana"  # Default Solana wallet directory
+WALLET_FILE="id.json"              # Default wallet file name
 
 # =============================================
 # NETWORK CONFIGURATION - SET TO DEVNET
@@ -149,6 +149,47 @@ ensure_min_balance() {
     fi
 }
 
+# Function to extract program ID from source files
+get_program_id() {
+    local program_id=""
+    
+    # Try to get program ID from Rust source files
+    if [ -d "programs" ]; then
+        program_id=$(grep -E '^declare_id!\("([^"]+)"\)' programs/*/src/lib.rs 2>/dev/null | head -1 | cut -d'"' -f2)
+    fi
+    
+    # If not found in source, try to get from Anchor.toml
+    if [ -z "$program_id" ] && [ -f "Anchor.toml" ]; then
+        program_id=$(grep -E '^\[programs\.' Anchor.toml 2>/dev/null | head -1 | cut -d'.' -f2 | cut -d']' -f1)
+        if [ -n "$program_id" ]; then
+            # Get the actual program ID value
+            program_id=$(grep -A1 "\[programs\.$program_id\]" Anchor.toml 2>/dev/null | grep -E '^\s*id\s*=' | cut -d'=' -f2 | tr -d ' "')
+        fi
+    fi
+    
+    # If still not found, try to get from target/idl
+    if [ -z "$program_id" ] && [ -d "target/idl" ]; then
+        local idl_file=$(ls target/idl/*.json 2>/dev/null | head -1)
+        if [ -n "$idl_file" ] && [ -f "$idl_file" ]; then
+            program_id=$(jq -r '.metadata.address' "$idl_file" 2>/dev/null)
+        fi
+    fi
+    
+    echo "$program_id"
+}
+
+# Function to display program ID with formatting
+show_program_id() {
+    local program_id=$(get_program_id)
+    if [ -n "$program_id" ]; then
+        echo -e "${MAGENTA}Program ID: ${GREEN}$program_id${NC}"
+        echo -e "${MAGENTA}Explorer: ${BLUE}https://explorer.solana.com/address/$program_id?cluster=devnet${NC}"
+    else
+        echo -e "${YELLOW}Program ID not found${NC}"
+    fi
+    echo
+}
+
 # =============================================
 # ANCHOR FUNCTIONS
 # =============================================
@@ -160,6 +201,10 @@ anchor_clean() {
     fi
     
     echo -e "${CYAN}Cleaning Anchor project...${NC}"
+    
+    # Show program ID before cleaning
+    echo -e "${MAGENTA}Current Program ID:${NC}"
+    show_program_id
     
     # Show balance before
     local start_balance=$(show_balance)
@@ -212,10 +257,20 @@ anchor_build() {
     if [ $? -eq 0 ]; then
         print_status "Project built successfully"
         
-        # Show program ID
-        local program_id=$(grep -E '^declare_id!\("([^"]+)"\)' programs/*/src/lib.rs | head -1 | cut -d'"' -f2)
-        if [ -n "$program_id" ]; then
-            print_info "Program ID: ${GREEN}$program_id${NC}"
+        # Show program ID after build
+        echo -e "${MAGENTA}Generated Program ID:${NC}"
+        show_program_id
+        
+        # Also try to get program ID from keypair files
+        local keypair_files=$(ls target/deploy/*-keypair.json 2>/dev/null)
+        if [ -n "$keypair_files" ]; then
+            for keypair in $keypair_files; do
+                local program_name=$(basename "$keypair" | sed 's/-keypair.json//')
+                local program_pubkey=$(solana-keygen pubkey "$keypair" 2>/dev/null)
+                if [ -n "$program_pubkey" ]; then
+                    echo -e "${MAGENTA}Program '$program_name' keypair: ${GREEN}$program_pubkey${NC}"
+                fi
+            done
         fi
     else
         print_error "Build failed"
@@ -235,6 +290,10 @@ anchor_deploy() {
     
     echo -e "${CYAN}Deploying Anchor project to DevNet...${NC}"
     
+    # Show program ID before deployment
+    echo -e "${MAGENTA}Program to be deployed:${NC}"
+    show_program_id
+    
     # Ensure minimum balance
     ensure_min_balance 1.5
     
@@ -248,11 +307,21 @@ anchor_deploy() {
     if [ $? -eq 0 ]; then
         print_status "Project deployed successfully to DevNet!"
         
-        # Show deployment details
-        local program_id=$(grep -E '^declare_id!\("([^"]+)"\)' programs/*/src/lib.rs | head -1 | cut -d'"' -f2)
+        # Show program ID after deployment
+        echo -e "${MAGENTA}Deployed Program ID:${NC}"
+        show_program_id
+        
+        # Verify on-chain deployment
+        local program_id=$(get_program_id)
         if [ -n "$program_id" ]; then
-            print_info "Program deployed at: ${GREEN}$program_id${NC}"
-            print_info "Explorer URL: https://explorer.solana.com/address/$program_id?cluster=devnet"
+            print_info "Verifying on-chain deployment..."
+            solana program show "$program_id" --url $RPC_URL
+            
+            if [ $? -eq 0 ]; then
+                print_status "Program verified on-chain!"
+            else
+                print_warning "Program deployed but not found on-chain yet (may need to wait for confirmation)"
+            fi
         fi
     else
         print_error "Deployment failed"
@@ -275,7 +344,7 @@ anchor_deploy() {
     
     # Show balance after
     local end_balance=$(show_balance)
-    local balance_change=$(awk "BEGIN {print $start_balance - $end_balance; exit}")
+    local balance_change=$(echo "$start_balance - $end_balance" | bc -l 2>/dev/null || echo "$start_balance - $end_balance" | awk '{print $1 - $3}')
     echo -e "${CYAN}Balance change: ${GREEN}$start_balance${NC} → ${GREEN}$end_balance${NC} SOL (Cost: ${RED}$balance_change${NC} SOL)${NC}"
 }
 
@@ -286,6 +355,10 @@ anchor_test() {
     fi
     
     echo -e "${CYAN}Testing Anchor project on DevNet...${NC}"
+    
+    # Show program ID being tested
+    echo -e "${MAGENTA}Testing Program ID:${NC}"
+    show_program_id
     
     # Show balance before
     local start_balance=$(show_balance)
@@ -303,8 +376,39 @@ anchor_test() {
     
     # Show balance after
     local end_balance=$(show_balance)
-    local balance_change=$(awk "BEGIN {print $start_balance - $end_balance; exit}")
+    local balance_change=$(echo "$start_balance - $end_balance" | bc -l 2>/dev/null || echo "$start_balance - $end_balance" | awk '{print $1 - $3}')
     echo -e "${CYAN}Balance change: ${GREEN}$start_balance${NC} → ${GREEN}$end_balance${NC} SOL (Cost: ${RED}$balance_change${NC} SOL)${NC}"
+}
+
+show_program_details() {
+    # Show detailed program information
+    echo -e "${MAGENTA}Program Details:${NC}"
+    show_program_id
+    
+    # Show keypair files if they exist
+    local keypair_files=$(ls target/deploy/*-keypair.json 2>/dev/null)
+    if [ -n "$keypair_files" ]; then
+        echo -e "${MAGENTA}Available program keypairs:${NC}"
+        for keypair in $keypair_files; do
+            local program_name=$(basename "$keypair" | sed 's/-keypair.json//')
+            local program_pubkey=$(solana-keygen pubkey "$keypair" 2>/dev/null)
+            if [ -n "$program_pubkey" ]; then
+                echo -e "  ${GREEN}$program_name${NC}: ${BLUE}$program_pubkey${NC}"
+                echo -e "    Keypair: ${YELLOW}$keypair${NC}"
+            fi
+        done
+    fi
+    
+    # Try to verify on-chain status
+    local program_id=$(get_program_id)
+    if [ -n "$program_id" ]; then
+        echo
+        echo -e "${MAGENTA}On-chain verification:${NC}"
+        solana program show "$program_id" --url $RPC_URL 2>/dev/null
+        if [ $? -ne 0 ]; then
+            echo -e "${YELLOW}Program not found on-chain${NC}"
+        fi
+    fi
 }
 
 # =============================================
@@ -315,6 +419,13 @@ show_menu() {
     echo
     echo -e "${CYAN}Select Anchor operations to run (DevNet):${NC}"
     echo
+    
+    # Show current program ID in menu
+    local current_program_id=$(get_program_id)
+    if [ -n "$current_program_id" ]; then
+        echo -e "${MAGENTA}Current Program ID: ${GREEN}$current_program_id${NC}"
+        echo
+    fi
     
     if [ "$ENABLE_ANCHOR_CLEAN" = true ]; then
         echo -e "  ${GREEN}1${NC}) Clean project"
@@ -336,6 +447,7 @@ show_menu() {
     echo -e "  ${GREEN}6${NC}) Request airdrop"
     echo -e "  ${GREEN}7${NC}) Check balance"
     echo -e "  ${GREEN}8${NC}) Change wallet directory"
+    echo -e "  ${GREEN}9${NC}) Show program details"
     echo -e "  ${GREEN}0${NC}) Exit"
     echo
     echo -e -n "${CYAN}Your choice (comma-separated for multiple, e.g., 1,2,3): ${NC}"
@@ -370,98 +482,117 @@ fi
 # Show initial balance
 show_balance
 
+# Show initial program ID if available
+echo
+show_program_id
+
 # =============================================
 # MAIN EXECUTION
 # =============================================
 
-show_menu
-read choices
+while true; do
+    show_menu
+    read choices
 
-# Convert comma-separated choices to array
-IFS=',' read -ra choices_array <<< "$choices"
+    # Convert comma-separated choices to array
+    IFS=',' read -ra choices_array <<< "$choices"
 
-# Check if we should exit
-for choice in "${choices_array[@]}"; do
-    if [ "$choice" = "0" ]; then
-        print_status "Goodbye!"
-        exit 0
-    fi
-done
+    # Check if we should exit
+    for choice in "${choices_array[@]}"; do
+        if [ "$choice" = "0" ]; then
+            print_status "Goodbye!"
+            exit 0
+        fi
+    done
 
-# Run selected operations
-for choice in "${choices_array[@]}"; do
-    case $choice in
-        1)
-            anchor_clean
-            ;;
-        2)
-            anchor_build
-            ;;
-        3)
-            anchor_deploy
-            ;;
-        4)
-            anchor_test
-            ;;
-        5)
-            # Run all operations in sequence
-            if [ "$ENABLE_ANCHOR_CLEAN" = true ]; then
+    # Run selected operations
+    for choice in "${choices_array[@]}"; do
+        case $choice in
+            1)
                 anchor_clean
-                echo
-            fi
-            
-            if [ "$ENABLE_ANCHOR_BUILD" = true ]; then
+                ;;
+            2)
                 anchor_build
-                echo
-            fi
-            
-            if [ "$ENABLE_ANCHOR_DEPLOY" = true ]; then
+                ;;
+            3)
                 anchor_deploy
-                echo
-            fi
-            
-            if [ "$ENABLE_ANCHOR_TEST" = true ]; then
+                ;;
+            4)
                 anchor_test
-                echo
-            fi
-            ;;
-        6)
-            request_airdrop 2
-            ;;
-        7)
-            show_balance
-            ;;
-        8)
-            echo -e -n "${CYAN}Enter new wallet directory: ${NC}"
-            read new_dir
-            if [ -d "$new_dir" ]; then
-                WALLET_DIR="$new_dir"
-                echo -e -n "${CYAN}Enter wallet file name: ${NC}"
-                read new_file
-                if [ -f "$WALLET_DIR/$new_file" ]; then
-                    WALLET_FILE="$new_file"
-                    check_wallet
-                else
-                    print_error "Wallet file not found: $WALLET_DIR/$new_file"
+                ;;
+            5)
+                # Run all operations in sequence
+                if [ "$ENABLE_ANCHOR_CLEAN" = true ]; then
+                    anchor_clean
+                    echo
                 fi
-            else
-                print_error "Directory not found: $new_dir"
-            fi
-            ;;
-        *)
-            print_error "Invalid option: $choice"
-            ;;
-    esac
+                
+                if [ "$ENABLE_ANCHOR_BUILD" = true ]; then
+                    anchor_build
+                    echo
+                fi
+                
+                if [ "$ENABLE_ANCHOR_DEPLOY" = true ]; then
+                    anchor_deploy
+                    echo
+                fi
+                
+                if [ "$ENABLE_ANCHOR_TEST" = true ]; then
+                    anchor_test
+                    echo
+                fi
+                ;;
+            6)
+                request_airdrop 2
+                ;;
+            7)
+                show_balance
+                ;;
+            8)
+                echo -e -n "${CYAN}Enter new wallet directory: ${NC}"
+                read new_dir
+                if [ -d "$new_dir" ]; then
+                    WALLET_DIR="$new_dir"
+                    echo -e -n "${CYAN}Enter wallet file name: ${NC}"
+                    read new_file
+                    if [ -f "$WALLET_DIR/$new_file" ]; then
+                        WALLET_FILE="$new_file"
+                        check_wallet
+                    else
+                        print_error "Wallet file not found: $WALLET_DIR/$new_file"
+                    fi
+                else
+                    print_error "Directory not found: $new_dir"
+                fi
+                ;;
+            9)
+                show_program_details
+                ;;
+            *)
+                print_error "Invalid option: $choice"
+                ;;
+        esac
+        
+        # Add spacing between operations
+        echo
+    done
+
+    print_info "Operations completed"
+    print_info "Final balance: $(get_balance) SOL"
+    print_info "Explorer: https://explorer.solana.com/?cluster=devnet"
+
+    # Show final status
+    echo -e "${GREEN}=============================================${NC}"
+    echo -e "${GREEN}DevNet deployment script execution finished${NC}"
+    echo -e "${GREEN}=============================================${NC}"
     
-    # Add spacing between operations
+    echo
+    echo -e -n "${CYAN}Run another operation? (y/N): ${NC}"
+    read continue_choice
+    if [[ ! "$continue_choice" =~ ^[Yy]$ ]]; then
+        break
+    fi
     echo
 done
 
-print_info "Operations completed"
-print_info "Final balance: $(get_balance) SOL"
-print_info "Explorer: https://explorer.solana.com/?cluster=devnet"
-
-# Show final status
-echo -e "${GREEN}=============================================${NC}"
-echo -e "${GREEN}DevNet deployment script execution finished${NC}"
-echo -e "${GREEN}=============================================${NC}"
+print_status "Goodbye!"
