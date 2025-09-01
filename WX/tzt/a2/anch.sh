@@ -13,8 +13,8 @@ ENABLE_ANCHOR_TEST=true
 # WALLET CONFIGURATION
 # =============================================
 
-WALLET_DIR="$HOME/.config/solana"  # Default Solana wallet directory
-WALLET_FILE="id.json"              # Default wallet file name
+WALLET_DIR="pee"  # Default Solana wallet directory
+WALLET_FILE="wallet_1.json"              # Default wallet file name
 
 # =============================================
 # NETWORK CONFIGURATION - SET TO DEVNET
