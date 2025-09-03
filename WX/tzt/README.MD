@@ -4,5 +4,6 @@
 
 # Diraz
 
-| Dir | What |
-| :-: | :--: |
+|     Dir      |                                  What                                   |
+| :----------: | :---------------------------------------------------------------------: |
+| [`a1`](./a1) | First attempt , the walz are in `pee` use `snch.sh` bash script for ops |
