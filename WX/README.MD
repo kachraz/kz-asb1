@@ -15,4 +15,4 @@
 
 |                          URL                          | Description |
 | :---------------------------------------------------: | :---------: |
-| [`Solana-tx`](https://tinyurl.com/solana-transaction) |
+| [`Solana-tx`](https://tinyurl.com/solana-transaction) | Example playground from cursa 
