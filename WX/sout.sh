@@ -7,7 +7,7 @@
 # Set to false to disable functions
 # ENABLE_CREATE_WALLET=true
 ENABLE_CHECK_BALANCE=true
-# ENABLE_TRANSFER_FUNDS=true
+ENABLE_TRANSFER_FUNDS=true
 ENABLE_AIRDROP=true
 
 # =============================================
