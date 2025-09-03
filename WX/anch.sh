@@ -13,8 +13,8 @@ ENABLE_ANCHOR_TEST=true
 # WALLET CONFIGURATION
 # =============================================
 
-WALLET_DIR="$HOME/.config/solana"  # Default Solana wallet directory
-WALLET_FILE="id.json"              # Default wallet file name
+WALLET_DIR="pee"  # Default Solana wallet directory
+WALLET_FILE="wallet_1.json"              # Default wallet file name
 
 # =============================================
 # NETWORK CONFIGURATION - SET TO DEVNET
@@ -111,6 +111,24 @@ check_solana_installed() {
     fi
 }
 
+check_node_installed() {
+    if ! command -v node &> /dev/null; then
+        print_error "Node.js is not installed. Please install it first." 
+        print_info "Installation instructions: https://nodejs.org/"
+        return 1
+    fi
+    return 0
+}
+
+check_yarn_installed() {
+    if ! command -v yarn &> /dev/null; then
+        print_error "Yarn is not installed. Please install it first." 
+        print_info "Installation instructions: https://yarnpkg.com/getting-started/install"
+        return 1
+    fi
+    return 0
+}
+
 check_wallet() {
     local wallet_path="$WALLET_DIR/$WALLET_FILE"
     
@@ -190,6 +208,137 @@ show_program_id() {
     echo
 }
 
+# Function to update program ID in Anchor.toml and lib.rs
+update_program_id() {
+    local new_program_id="$1"
+    local program_name="$2"
+    
+    if [ -z "$new_program_id" ]; then
+        print_error "No program ID provided for update"
+        return 1
+    fi
+    
+    # Update Anchor.toml
+    if [ -f "Anchor.toml" ]; then
+        if [ -n "$program_name" ]; then
+            # Update specific program
+            sed -i.bak "s/^\[programs\.$program_name\]$/\[programs\.$program_name\]\nid = \"$new_program_id\"/" Anchor.toml
+        else
+            # Update first program found
+            sed -i.bak "0,/^\[programs\.[^]]*\]$/{s/^\[programs\.[^]]*\]$/&\nid = \"$new_program_id\"/}" Anchor.toml
+        fi
+        print_status "Updated Anchor.toml with program ID: $new_program_id"
+    fi
+    
+    # Update lib.rs files
+    if [ -d "programs" ]; then
+        for lib_file in programs/*/src/lib.rs; do
+            if [ -f "$lib_file" ]; then
+                sed -i.bak "s/declare_id!(\"[^\"]*\")/declare_id!(\"$new_program_id\")/" "$lib_file"
+                print_status "Updated $lib_file with program ID: $new_program_id"
+            fi
+        done
+    fi
+    
+    # Clean up backup files
+    rm -f Anchor.toml.bak programs/*/src/lib.rs.bak 2>/dev/null
+}
+
+# Function to generate a new program ID
+generate_program_id() {
+    local program_name="$1"
+    local keypair_file="target/deploy/${program_name}-keypair.json"
+    
+    # Generate keypair if it doesn't exist
+    if [ ! -f "$keypair_file" ]; then
+        solana-keygen new --outfile "$keypair_file" --no-passphrase --force
+        if [ $? -ne 0 ]; then
+            print_error "Failed to generate keypair for $program_name"
+            return 1
+        fi
+    fi
+    
+    # Get the public key from the keypair
+    local pubkey=$(solana-keygen pubkey "$keypair_file" 2>/dev/null)
+    if [ -n "$pubkey" ]; then
+        echo "$pubkey"
+        return 0
+    else
+        print_error "Failed to get public key from keypair file"
+        return 1
+    fi
+}
+
+# Function to setup program ID before operations
+setup_program_id() {
+    echo -e "${CYAN}Setting up program ID...${NC}"
+    
+    # Check if we already have a program ID
+    local current_program_id=$(get_program_id)
+    if [ -n "$current_program_id" ]; then
+        echo -e "${GREEN}Current program ID: $current_program_id${NC}"
+        echo -e -n "${CYAN}Keep current program ID? (Y/n): ${NC}"
+        read keep_current
+        if [[ "$keep_current" =~ ^[Nn]$ ]]; then
+            # User wants to generate new program ID
+            current_program_id=""
+        fi
+    fi
+    
+    # If no program ID or user wants new one, generate it
+    if [ -z "$current_program_id" ]; then
+        # Get program name (first program directory found)
+        local program_name=$(ls programs/ 2>/dev/null | head -1)
+        if [ -z "$program_name" ]; then
+            print_error "No program directories found in programs/"
+            return 1
+        fi
+        
+        print_info "Generating new program ID for $program_name"
+        local new_program_id=$(generate_program_id "$program_name")
+        if [ $? -eq 0 ]; then
+            update_program_id "$new_program_id" "$program_name"
+            print_status "Program ID setup complete: $new_program_id"
+        else
+            print_error "Failed to generate program ID"
+            return 1
+        fi
+    fi
+    
+    return 0
+}
+
+# Function to install yarn dependencies
+yarn_install() {
+    echo -e "${CYAN}Installing yarn dependencies...${NC}"
+    
+    if ! check_node_installed; then
+        print_warning "Node.js not installed, skipping yarn install"
+        return 1
+    fi
+    
+    if ! check_yarn_installed; then
+        print_warning "Yarn not installed, skipping yarn install"
+        return 1
+    fi
+    
+    if [ -f "package.json" ]; then
+        print_info "Running yarn install"
+        yarn install
+        
+        if [ $? -eq 0 ]; then
+            print_status "Yarn dependencies installed successfully"
+        else
+            print_error "Yarn install failed"
+            return 1
+        fi
+    else
+        print_warning "No package.json found, skipping yarn install"
+    fi
+    
+    return 0
+}
+
 # =============================================
 # ANCHOR FUNCTIONS
 # =============================================
@@ -247,6 +396,12 @@ anchor_build() {
     
     echo -e "${CYAN}Building Anchor project...${NC}"
     
+    # Setup program ID first
+    if ! setup_program_id; then
+        print_error "Failed to setup program ID, cannot build"
+        return 1
+    fi
+    
     # Show balance before
     local start_balance=$(show_balance)
     
@@ -289,6 +444,12 @@ anchor_deploy() {
     fi
     
     echo -e "${CYAN}Deploying Anchor project to DevNet...${NC}"
+    
+    # Setup program ID first
+    if ! setup_program_id; then
+        print_error "Failed to setup program ID, cannot deploy"
+        return 1
+    fi
     
     # Show program ID before deployment
     echo -e "${MAGENTA}Program to be deployed:${NC}"
@@ -355,6 +516,9 @@ anchor_test() {
     fi
     
     echo -e "${CYAN}Testing Anchor project on DevNet...${NC}"
+    
+    # Install yarn dependencies first (required for tests)
+    yarn_install
     
     # Show program ID being tested
     echo -e "${MAGENTA}Testing Program ID:${NC}"
@@ -448,6 +612,8 @@ show_menu() {
     echo -e "  ${GREEN}7${NC}) Check balance"
     echo -e "  ${GREEN}8${NC}) Change wallet directory"
     echo -e "  ${GREEN}9${NC}) Show program details"
+    echo -e "  ${GREEN}10${NC}) Setup program ID"
+    echo -e "  ${GREEN}11${NC}) Install yarn dependencies"
     echo -e "  ${GREEN}0${NC}) Exit"
     echo
     echo -e -n "${CYAN}Your choice (comma-separated for multiple, e.g., 1,2,3): ${NC}"
@@ -481,6 +647,15 @@ fi
 
 # Show initial balance
 show_balance
+
+# Setup program ID automatically at start
+echo
+print_info "Setting up program ID automatically..."
+if setup_program_id; then
+    print_status "Program ID setup complete"
+else
+    print_warning "Program ID setup failed, you may need to set it up manually"
+fi
 
 # Show initial program ID if available
 echo
@@ -567,6 +742,12 @@ while true; do
                 ;;
             9)
                 show_program_details
+                ;;
+            10)
+                setup_program_id
+                ;;
+            11)
+                yarn_install
                 ;;
             *)
                 print_error "Invalid option: $choice"
