@@ -10,7 +10,15 @@ pub mod a3 {
         msg!("Smell Panty: {:?}", ctx.program_id);
         Ok(())
     }
+
+    pub fn update(ctx: Context<update>) -> Result<()> {
+        msg!("LickPussy: {:?}", ctx.program_id);
+        Ok(())
+    }
 }
 
 #[derive(Accounts)]
 pub struct Initialize {}
+
+#[derive(Accounts)]
+pub struct Update {}
