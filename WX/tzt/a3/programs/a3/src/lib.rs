@@ -1,6 +1,6 @@
 use anchor_lang::prelude::*;
 
-declare_id!("8ywxnddq1a4n5mCeHYgvNV3fW8hVK66QJjri1vCZeUMY");
+declare_id!("396WrQJ3GqxxdCkwmGQGcghkHAMg8waHvqQBmELXzCgH");
 
 #[program]
 pub mod a3 {
@@ -11,7 +11,7 @@ pub mod a3 {
         Ok(())
     }
 
-    pub fn update(ctx: Context<update>) -> Result<()> {
+    pub fn update(ctx: Context<Update>) -> Result<()> {
         msg!("LickPussy: {:?}", ctx.program_id);
         Ok(())
     }
