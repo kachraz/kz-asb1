@@ -5,7 +5,8 @@ declare_id!("8UduvTcKFfB6DRuSvNzHBsNHtZqYYXnYcAR5KaDZEqMF");
 #[program]
 pub mod a3 {
     use super::*;
-
+    
+    // This is how thte eac function is aded 
     pub fn initialize(ctx: Context<Initialize>) -> Result<()> {
         msg!("Smell Panty: {:?}", ctx.program_id);
         Ok(())
